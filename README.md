@@ -10,7 +10,9 @@ restarts, and failed sends can retry. The command-line checker below remains
 available for standalone use.
 Set `BOAT_DATES=2026-11-20,2026-11-21` in an existing configuration to enable both
 dates; it takes precedence over legacy `BOAT_DATE`. Both dates use the same
-13:00–16:00 Japan-time window by default. Each date has its own booking cutoff
+00:00–23:59 Japan-time window by default, covering all calendar slots.
+For an existing VPS, also set `BOAT_FROM=00:00` and `BOAT_TO=23:59`;
+existing environment settings override the new defaults. Each date has its own booking cutoff
 and notification state; one failed check does not prevent the other date's check.
 
 Send `/boat_history` in the configured Telegram chat to see up to six calendar check results:
@@ -27,7 +29,7 @@ Python 3.10+; no third-party packages required. Run from this directory:
 python3 check_boats.py
 ```
 
-Defaults to **November 20, 2026**, for **start times from 13:00 through 16:00 inclusive, Japan time (UTC+9)**. A 16:00 ride ends at 16:30. If you need to finish by 16:00, use `--to 15:30`.
+Defaults to **November 20, 2026**, for **all start times from 00:00 through 23:59 inclusive, Japan time (UTC+9)**. A 16:00 ride ends at 16:30. If you need to finish by 16:00, use `--to 15:30`.
 
 Repeat every five minutes until a bookable slot appears:
 

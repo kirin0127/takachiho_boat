@@ -1,6 +1,7 @@
 import contextlib
 from datetime import date, time
 import io
+import json
 import unittest
 from unittest.mock import patch
 
@@ -74,6 +75,18 @@ class CalendarTests(unittest.TestCase):
             with patch.object(boat, "fetch_calendar", return_value={"errors": [], "results": events}), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(boat.main([]), code)
+
+    def test_cli_defaults_include_all_times_but_only_requested_date(self):
+        events = [event('2026-11-20T08:30:00+09:00', '2026-11-20T09:00:00+09:00'),
+                  event('2026-11-20T16:30:00+09:00', '2026-11-20T17:00:00+09:00'),
+                  event('2026-11-21T10:00:00+09:00', '2026-11-21T10:30:00+09:00')]
+        output = io.StringIO()
+        with patch.object(boat, 'fetch_calendar', return_value={'errors': [], 'results': events}), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(boat.main(['--json']), 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual((report['start_time_from'], report['start_time_to']), ('00:00', '23:59'))
+        self.assertEqual([slot['start'][11:16] for slot in report['slots']], ['08:30', '16:30'])
 
     def test_watch_recovers_from_error_and_stops_on_availability(self):
         responses = [boat.CheckError("Network unavailable"),

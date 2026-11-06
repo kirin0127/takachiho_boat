@@ -175,9 +175,9 @@ def parse_time(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", type=date.fromisoformat, default=date(2026, 11, 20))
-    parser.add_argument("--from", dest="earliest", type=parse_time, default=time(13))
-    parser.add_argument("--to", dest="latest", type=parse_time, default=time(16),
-                        help="Latest allowed START time, inclusive (default: 16:00).")
+    parser.add_argument("--from", dest="earliest", type=parse_time, default=time(0))
+    parser.add_argument("--to", dest="latest", type=parse_time, default=time(23, 59),
+                        help="Latest allowed START time, inclusive (default: 23:59).")
     parser.add_argument("--watch", action="store_true",
                         help="Repeat until availability is found; Ctrl+C to stop.")
     parser.add_argument("--interval", type=int, default=300,

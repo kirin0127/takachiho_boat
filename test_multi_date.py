@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 import io
 import contextlib
 import os
@@ -28,7 +28,8 @@ class MultiDateTests(unittest.TestCase):
         self.assertEqual(second.state_file.name, 'notifications-2026-11-21.json')
         self.assertNotEqual(first.scope, second.scope)
         self.assertEqual(second.deadline.isoformat(), '2026-11-19T09:00:00+09:00')
-        self.assertEqual((first.earliest, first.latest), (second.earliest, second.latest))
+        self.assertEqual((first.earliest, first.latest), (time(0), time(23, 59)))
+        self.assertEqual((second.earliest, second.latest), (time(0), time(23, 59)))
 
     def test_explicit_dates_override_legacy_date_and_deduplicate(self):
         config = self.load({'BOAT_DATE': '2026-11-19',
@@ -75,6 +76,38 @@ class MultiDateTests(unittest.TestCase):
             self.assertEqual(notifier.main(['--dry-run']), 0)
             self.assertEqual(check.call_count, 2)
             self.assertTrue(all(call.kwargs['dry_run'] for call in check.call_args_list))
+
+    def test_full_day_alerts_and_history_include_morning_and_evening_for_both_dates(self):
+        def calendar(day, timeout):
+            times = [('00:00', '00:30'), ('08:30', '09:00'), ('10:00', '10:30'),
+                     ('13:00', '13:30'), ('16:30', '17:00'), ('23:00', '23:30')]
+            return {'errors': [], 'results': [
+                event(f'{day}T{start}:00+09:00', f'{day}T{end}:00+09:00')
+                for start, end in times
+            ]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = replace(self.load(), state_file=Path(directory) / 'notifications.json')
+            with patch.object(boat, 'fetch_calendar', side_effect=calendar), \
+                    patch.object(notifier, 'publish_result') as publish, \
+                    patch.object(notifier, 'send_message', return_value=123) as send:
+                for daily in config.daily_configs():
+                    notifier.check_and_notify(daily, now=NOW)
+                self.assertEqual(publish.call_count, 2)
+                for call in publish.call_args_list:
+                    report = call.args[1]
+                    self.assertEqual((report['start_time_from'], report['start_time_to']),
+                                     ('00:00', '23:59'))
+                    self.assertEqual(len(report['slots']), 6)
+                self.assertEqual(send.call_count, 2)
+                for call in send.call_args_list:
+                    self.assertIn('08:30–09:00', call.args[1])
+                    self.assertIn('16:30–17:00', call.args[1])
+
+    def test_explicit_time_window_still_overrides_all_day_defaults(self):
+        config = self.load({'BOAT_FROM': '10:00', 'BOAT_TO': '16:00'})
+        for daily in config.daily_configs():
+            self.assertEqual((daily.earliest, daily.latest), (time(10), time(16)))
 
     def test_first_cutoff_does_not_stop_second_date(self):
         first, second = self.load().daily_configs()

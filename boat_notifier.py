@@ -110,8 +110,8 @@ def load_config(env_file=None, require_telegram=True):
         raw_dates = values.get("BOAT_DATES", values.get("BOAT_DATE", "2026-11-20,2026-11-21"))
         days = tuple(dict.fromkeys(date.fromisoformat(value.strip()) for value in raw_dates.split(",")))
         day = days[0]
-        earliest = datetime.strptime(values.get("BOAT_FROM", "13:00"), "%H:%M").time()
-        latest = datetime.strptime(values.get("BOAT_TO", "16:00"), "%H:%M").time()
+        earliest = datetime.strptime(values.get("BOAT_FROM", "00:00"), "%H:%M").time()
+        latest = datetime.strptime(values.get("BOAT_TO", "23:59"), "%H:%M").time()
         timeout = int(values.get("REQUEST_TIMEOUT_SECONDS", "30"))
         thread_id = int(values["TELEGRAM_THREAD_ID"]) if values.get("TELEGRAM_THREAD_ID") else None
         history_port = int(values.get("BOAT_HISTORY_PORT", "8766"))

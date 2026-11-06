@@ -209,6 +209,8 @@ class ConfigurationImportTests(unittest.TestCase):
         values = notifier.read_env(self.output)
         self.assertEqual(values["TELEGRAM_BOT_TOKEN"], TOKEN)
         self.assertEqual(values["TELEGRAM_CHAT_ID"], "-123")
+        self.assertEqual(values["BOAT_FROM"], "00:00")
+        self.assertEqual(values["BOAT_TO"], "23:59")
         self.assertEqual(self.output.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.database.read_bytes(), before)
         self.assertEqual(self.run_import()[0], 2)  # Existing config is not overwritten.

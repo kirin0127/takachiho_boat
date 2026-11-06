@@ -1,6 +1,6 @@
 # Deploy the boat notifier to your existing VPS
 
-This runs alongside your existing second-hand notification service. It uses the same Telegram bot and chosen chat, checks November 20 and 21, 2026 for starts between 13:00 and 16:00 Japan time, and sends a message when a slot becomes available.
+This runs alongside your existing second-hand notification service. It uses the same Telegram bot and chosen chat, checks November 20 and 21, 2026 for all start times (00:00–23:59 Japan time), and sends a message when a slot becomes available.
 
 The supplied systemd timer runs one check every two minutes after the previous check finishes. Each run exits when done. Multiple Python programs can run on the same VPS; systemd manages them separately.
 
@@ -15,14 +15,18 @@ The notifier only calls Telegram's `sendMessage`; the existing `pttbot` handles 
 ## Enable November 21 on an existing VPS
 
 Update both `takachiho_boat` and `second_hand_notify`, then set this in
-`/etc/takachiho-boat.env` (replace any existing `BOAT_DATES` assignment):
+`/etc/takachiho-boat.env` (replace any existing assignments for these three settings):
 
 ```ini
 BOAT_DATES=2026-11-20,2026-11-21
+BOAT_FROM=00:00
+BOAT_TO=23:59
 ```
 
 This overrides an old `BOAT_DATE=2026-11-20`; the existing environment file is
 preserved by automatic deployments, so it must be updated separately.
+The `BOAT_FROM` / `BOAT_TO` settings above expand both dates to all calendar
+slots; old 13:00–16:00 settings would continue to restrict the scan.
 Restart `pttbot` to load the new per-date cache. The next timer run checks both
 dates; no timer change is required. After three checks per date, `/boat_history`
 shows six records. Until then it shows the records actually received.
@@ -149,8 +153,8 @@ Configuration fields:
 | `TELEGRAM_THREAD_ID` | Optional Telegram forum topic ID |
 | `BOAT_DATES` | Comma-separated dates; default `2026-11-20,2026-11-21` |
 | `BOAT_DATE` | Legacy single date, used only when `BOAT_DATES` is absent |
-| `BOAT_FROM` | Earliest allowed start, `13:00` Japan time |
-| `BOAT_TO` | Latest allowed start, `16:00`, inclusive |
+| `BOAT_FROM` | Earliest allowed start, `00:00` Japan time (all-day default) |
+| `BOAT_TO` | Latest allowed start, `23:59`, inclusive (all-day default) |
 | `BOAT_STATE_FILE` | `/var/lib/takachiho-boat/notifications.json` |
 | `REQUEST_TIMEOUT_SECONDS` | `30`, permitted range 1–60 |
 | `BOAT_HISTORY_PORT` | Local `pttbot` cache port, default `8766`; `0` disables publishing |
