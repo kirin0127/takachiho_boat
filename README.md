@@ -3,16 +3,20 @@
 For VPS monitoring with your existing Telegram bot, follow [DEPLOY.md](DEPLOY.md).
 Pushes to `main` can deploy automatically through `.github/workflows/deploy.yml`;
 configure only `VPS_HOST`, `VPS_USER` (`deploy`), and `VPS_SSH_KEY` using your existing deploy private key. SSH uses port 22. See section 8 of the deployment guide for setup.
-`boat_notifier.py` checks once and sends alerts; the supplied systemd timer runs it
+`boat_notifier.py` checks November 20 and 21, 2026 on each run and sends alerts; the supplied systemd timer runs it
 every two minutes. `configure_telegram.py` imports the bot token and selected chat
 from `second_hand_notify` on the VPS. Successful alerts are remembered across
 restarts, and failed sends can retry. The command-line checker below remains
 available for standalone use.
+Set `BOAT_DATES=2026-11-20,2026-11-21` in an existing configuration to enable both
+dates; it takes precedence over legacy `BOAT_DATE`. Both dates use the same
+13:00–16:00 Japan-time window by default. Each date has its own booking cutoff
+and notification state; one failed check does not prevent the other date's check.
 
-Send `/boat_history` in the configured Telegram chat to see the five most recent
-calendar check results, newest first. In a group, use
+Send `/boat_history` in the configured Telegram chat to see up to six calendar check results:
+November 20’s latest three, followed by November 21’s latest three (newest first within each date). In a group, use
 `/boat_history@YourBotUsername` if needed. This requires the updated
-`second_hand_notify` bot: it holds a five-entry Python `deque` in memory and
+`second_hand_notify` bot: it holds a three-entry Python `deque` per chat and ride date in memory and
 receives each scheduled result on an authenticated localhost endpoint. History
 clears when `pttbot` restarts; no check-history database or file is created.
 See **Enable /boat_history on an existing VPS** in [DEPLOY.md](DEPLOY.md).

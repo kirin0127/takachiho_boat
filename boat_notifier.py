@@ -3,7 +3,7 @@
 
 import argparse
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 import fcntl
 from http.client import HTTPException
@@ -69,6 +69,15 @@ class Config:
     timeout: int = 30
     thread_id: int | None = None
     history_port: int = 8766
+    additional_days: tuple[date, ...] = ()
+
+    def daily_configs(self):
+        # Keep the first date's existing state file when upgrading from one date.
+        yield replace(self, additional_days=())
+        for day in self.additional_days:
+            path = self.state_file.with_name(
+                f"{self.state_file.stem}-{day.isoformat()}{self.state_file.suffix}")
+            yield replace(self, day=day, state_file=path, additional_days=())
 
     @property
     def deadline(self):
@@ -97,7 +106,10 @@ def load_config(env_file=None, require_telegram=True):
         if not re.fullmatch(r"-?[1-9][0-9]*", chat_id):
             raise ConfigError("Set TELEGRAM_CHAT_ID to the existing numeric chat ID.")
     try:
-        day = date.fromisoformat(values.get("BOAT_DATE", "2026-11-20"))
+        # BOAT_DATES overrides the legacy single-date setting.
+        raw_dates = values.get("BOAT_DATES", values.get("BOAT_DATE", "2026-11-20,2026-11-21"))
+        days = tuple(dict.fromkeys(date.fromisoformat(value.strip()) for value in raw_dates.split(",")))
+        day = days[0]
         earliest = datetime.strptime(values.get("BOAT_FROM", "13:00"), "%H:%M").time()
         latest = datetime.strptime(values.get("BOAT_TO", "16:00"), "%H:%M").time()
         timeout = int(values.get("REQUEST_TIMEOUT_SECONDS", "30"))
@@ -112,7 +124,7 @@ def load_config(env_file=None, require_telegram=True):
     state_file = Path(values.get("BOAT_STATE_FILE", str(BASE_DIR / "state" / "notifications.json")))
     if not state_file.is_absolute():
         state_file = BASE_DIR / state_file
-    return Config(token, chat_id, day, earliest, latest, state_file, timeout, thread_id, history_port)
+    return Config(token, chat_id, day, earliest, latest, state_file, timeout, thread_id, history_port, days[1:])
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -301,11 +313,20 @@ def main(argv=None):
         config = load_config(args.env_file, require_telegram=not args.dry_run)
         if args.test_telegram:
             send_message(config, "🚣 Takachiho boat notifier setup test.\n"
-                         f"Monitoring {config.day}, {config.earliest:%H:%M}–{config.latest:%H:%M} "
+                         f"Monitoring {', '.join(c.day.isoformat() for c in config.daily_configs())}, "
+                         f"{config.earliest:%H:%M}–{config.latest:%H:%M} "
                          "start times (Japan time).\nThis is a setup test, not an availability alert.")
             log.info("Telegram setup test sent successfully.")
         else:
-            check_and_notify(config, dry_run=args.dry_run)
+            failed = False
+            for daily in config.daily_configs():
+                try:
+                    check_and_notify(daily, dry_run=args.dry_run)
+                except (ConfigError, boat.CheckError, TelegramError, OSError, HTTPException) as exc:
+                    log.error("%s: %s", daily.day, exc)
+                    failed = True
+            if failed:
+                return 2
         return 0
     except (ConfigError, boat.CheckError, TelegramError, OSError, HTTPException) as exc:
         log.error("%s", exc)

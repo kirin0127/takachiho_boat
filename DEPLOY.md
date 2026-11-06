@@ -1,6 +1,6 @@
 # Deploy the boat notifier to your existing VPS
 
-This runs alongside your existing second-hand notification service. It uses the same Telegram bot and chosen chat, checks November 20, 2026 for starts between 13:00 and 16:00 Japan time, and sends a message when a slot becomes available.
+This runs alongside your existing second-hand notification service. It uses the same Telegram bot and chosen chat, checks November 20 and 21, 2026 for starts between 13:00 and 16:00 Japan time, and sends a message when a slot becomes available.
 
 The supplied systemd timer runs one check every two minutes after the previous check finishes. Each run exits when done. Multiple Python programs can run on the same VPS; systemd manages them separately.
 
@@ -11,6 +11,24 @@ The local project at `/Users/jeffchuangmbp2024/Desktop/Projects/second_hand_noti
 Its existing GitHub workflow uses secrets named `VPS_HOST`, `VPS_USER`, and `VPS_SSH_KEY`. The actual secret values, live `.env`, recipient database, and VPS address are not present in this local checkout. The steps below reuse the live values on the VPS. Replace `YOUR_VPS_HOST` with your VPS address. The GitHub repository is `kirin0127/takachiho_boat`; the VPS installation directory remains `/opt/boat`. Confirm the paths against your actual service if they differ from the documented defaults.
 
 The notifier only calls Telegram's `sendMessage`; the existing `pttbot` handles incoming commands, including `/boat_history`. After each scheduled check, the notifier also forwards a compact signed result to `pttbot` on `127.0.0.1:8766`. No new domain, public incoming port, Caddy configuration, or bot is needed.
+
+## Enable November 21 on an existing VPS
+
+Update both `takachiho_boat` and `second_hand_notify`, then set this in
+`/etc/takachiho-boat.env` (replace any existing `BOAT_DATES` assignment):
+
+```ini
+BOAT_DATES=2026-11-20,2026-11-21
+```
+
+This overrides an old `BOAT_DATE=2026-11-20`; the existing environment file is
+preserved by automatic deployments, so it must be updated separately.
+Restart `pttbot` to load the new per-date cache. The next timer run checks both
+dates; no timer change is required. After three checks per date, `/boat_history`
+shows six records. Until then it shows the records actually received.
+The first date retains `BOAT_STATE_FILE`; additional dates use a sibling such as
+`notifications-2026-11-21.json`, preserving independent alert deduplication.
+Each date stops at its own booking cutoff, and failures do not skip other dates.
 
 ## Enable /boat_history on an existing VPS
 
@@ -52,9 +70,9 @@ These updates do not change your timer configuration; an existing 60-second over
 
 Send `/boat_history` in the configured group. If Telegram privacy mode prevents delivery of the unaddressed command, send `/boat_history@YourBotUsername`. The command also appears in the bot's slash-command menu after `pttbot` restarts. Any member of the configured group can request its history; unrelated chats cannot retrieve that group's cached results.
 
-The reply shows up to five **calendar check results**, including checks with no available slots, individual slot statuses, and failed checks. Times are in Japan time and records are newest first. It does not fetch the calendar on demand, and it is not a history of Telegram alerts. Failed calendar checks are shown as `ERROR`, never as sold out. A failed Telegram alert does not alter the calendar result already cached.
+The reply shows up to six **calendar check results** (the latest three for November 20, then the latest three for November 21), including checks with no available slots, individual slot statuses, and failed checks. Times are in Japan time and records are newest first within each ride date. It does not fetch the calendar on demand, and it is not a history of Telegram alerts. Failed calendar checks are shown as `ERROR`, never as sold out. A failed Telegram alert does not alter the calendar result already cached.
 
-History is a Python `deque(maxlen=5)` in the long-running `pttbot` process. Nothing is written to a history database or file. After a bot restart, fewer than five records are normal until checks refill the cache. After the booking cutoff, no further calendar checks are made, so the last cached timestamps stop advancing. The existing JSON file for notification deduplication remains separate from this history feature.
+History uses a Python `deque(maxlen=3)` per chat and ride date in the long-running `pttbot` process. Nothing is written to a history database or file. After a bot restart, fewer than three records per date are normal until checks refill the cache. After the booking cutoff, no further calendar checks are made, so the last cached timestamps stop advancing. The existing JSON file for notification deduplication remains separate from this history feature.
 
 If the command reports an empty cache, confirm `TELEGRAM_CHAT_ID` is the chat where you issued the command, and inspect both service journals. A `History cache unreachable or rejected this check` warning means the listener is down, the ports differ, or the two bot tokens differ. Cache delivery is best-effort with a two-second timeout; missed history records are not replayed. Availability alerts continue when the cache is unavailable. Do not open port 8766 in the firewall or expose it through Caddy.
 
@@ -129,7 +147,8 @@ Configuration fields:
 | `TELEGRAM_BOT_TOKEN` | Existing bot's API token |
 | `TELEGRAM_CHAT_ID` | Numeric target chat ID, including `-` for groups |
 | `TELEGRAM_THREAD_ID` | Optional Telegram forum topic ID |
-| `BOAT_DATE` | `2026-11-20` |
+| `BOAT_DATES` | Comma-separated dates; default `2026-11-20,2026-11-21` |
+| `BOAT_DATE` | Legacy single date, used only when `BOAT_DATES` is absent |
 | `BOAT_FROM` | Earliest allowed start, `13:00` Japan time |
 | `BOAT_TO` | Latest allowed start, `16:00`, inclusive |
 | `BOAT_STATE_FILE` | `/var/lib/takachiho-boat/notifications.json` |

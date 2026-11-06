@@ -53,7 +53,7 @@ def main(argv=None):
         content = (
             "# Imported locally from second_hand_notify. Keep this file off GitHub.\n"
             f"TELEGRAM_BOT_TOKEN={token}\nTELEGRAM_CHAT_ID={chosen}\n"
-            "TELEGRAM_THREAD_ID=\nBOAT_DATE=2026-11-20\nBOAT_FROM=13:00\nBOAT_TO=16:00\n"
+            "TELEGRAM_THREAD_ID=\nBOAT_DATES=2026-11-20,2026-11-21\nBOAT_FROM=13:00\nBOAT_TO=16:00\n"
             "BOAT_STATE_FILE=/var/lib/takachiho-boat/notifications.json\n"
             "REQUEST_TIMEOUT_SECONDS=30\n"
         )
