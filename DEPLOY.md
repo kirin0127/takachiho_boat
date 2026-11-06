@@ -288,97 +288,36 @@ The exact non-interactive permissions are listed in `deploy/deploy.sudoers`. As 
 
 Run `git fetch` as **deploy**, not as root. Root's GitHub key and SSH configuration are not automatically available to deploy. If the private repository cannot be fetched, configure a separate read-only GitHub deploy key under the deploy account and authorize its public key in this repository's **Settings → Deploy keys**.
 
-### B. Add secrets to the boat repository
+### B. Reuse the existing deploy private key
 
-Open [takachiho_boat → Settings → Secrets and variables → Actions](https://github.com/kirin0127/takachiho_boat/settings/secrets/actions). Select **New repository secret** for each of these:
+Open [takachiho_boat → Settings → Secrets and variables → Actions](https://github.com/kirin0127/takachiho_boat/settings/secrets/actions). Configure only these three repository secrets:
 
 | Secret | Value |
 | --- | --- |
-| `VPS_HOST` | VPS IP address or hostname, matching the existing deployment |
+| `VPS_HOST` | VPS IP address or hostname |
 | `VPS_USER` | `deploy` |
-| `VPS_SSH_KEY` | Full SSH **private key** whose public key is authorized for the VPS's `deploy` account, including BEGIN/END lines |
-| `VPS_HOST_FINGERPRINT` | The VPS's SSH host fingerprint, obtained below |
+| `VPS_SSH_KEY` | Complete existing deploy private key, including BEGIN/END lines |
 
-These are repository secrets; values configured in `second_hand_notify` are not automatically inherited. Reuse the host and original private key if that workflow already logs in as `deploy`; set the username explicitly to `deploy`. A key authorized only for root will not automatically authenticate as deploy. GitHub cannot show a saved secret's value back to you, so obtain the private key from the original key file or create a new key below.
+Reuse the private key you already created as deploy on the VPS and can retrieve. No new key is needed. Its corresponding public key must be present in `/home/deploy/.ssh/authorized_keys` for incoming login. If the same key already works for the `second_hand_notify` Actions login as deploy, reuse that exact private key here. Secrets in the other repository are not inherited automatically.
 
-There are two different SSH connections:
+The workflow uses SSH port 22 and a private key without a passphrase. It does not perform host fingerprint verification. It reads no additional SSH secrets. The Telegram token and chat ID remain in the existing VPS environment file.
 
-| Connection | Private key location | Where its public key is authorized |
-| --- | --- | --- |
-| GitHub Actions → VPS as `deploy` | `VPS_SSH_KEY` GitHub secret; original key file may be on your Mac | `/home/deploy/.ssh/authorized_keys` on the VPS |
-| VPS as `deploy` → GitHub, for `git fetch` | SSH key file under `/home/deploy/.ssh/` on the VPS | GitHub repository deploy keys or an authorized GitHub account |
-
-Creating the Linux account does not create an incoming-login private key. The VPS usually holds only the **public** keys accepted for incoming login in `authorized_keys`; a private key cannot be recovered from those public keys. A file such as `/home/deploy/.ssh/id_ed25519` may instead be the outgoing GitHub key. Do not assume it is the private key needed by Actions.
-
-To identify a matching existing key without displaying private key contents, list authorized key fingerprints **on the VPS**:
+To copy an existing key from the VPS directly to your Mac clipboard, run on your Mac, replacing the host and filename with the actual values:
 
 ```bash
-sudo ssh-keygen -lf /home/deploy/.ssh/authorized_keys
+ssh deploy@YOUR_VPS_HOST 'cat /home/deploy/.ssh/YOUR_EXISTING_PRIVATE_KEY' | pbcopy
 ```
 
-On your Mac, inspect the fingerprint of a candidate public key, replacing the filename with the actual one:
+Paste the clipboard into `VPS_SSH_KEY`. This command reads the existing key; it does not create or replace one.
 
-```bash
-ssh-keygen -lf ~/.ssh/id_ed25519.pub
-```
+After a deployment succeeds using that existing key, clean up the temporary setup:
 
-If the fingerprints match and the corresponding private key exists, test it directly:
+1. Delete unused `VPS_HOST_FINGERPRINT`, `VPS_PORT`, and `VPS_SSH_PASSPHRASE` secrets from this repository if present.
+2. On the Mac, display `~/.ssh/takachiho_actions.pub` to identify the exact temporary public key. Keep an administrator VPS session open.
+3. On the VPS, back up `/home/deploy/.ssh/authorized_keys` and remove only the line matching that temporary public key. Preserve the existing deploy key and other authorized keys.
+4. On the Mac, delete `~/.ssh/takachiho_actions` and `~/.ssh/takachiho_actions.pub` after confirming they are the temporary pair and are no longer in use.
 
-```bash
-ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes deploy@YOUR_VPS_HOST whoami
-```
-
-The result should be `deploy`. Copy that private key into the GitHub secret with `pbcopy < ~/.ssh/id_ed25519`. If you cannot find the original private key, add a new key below; no changes to the existing bot's login key are necessary.
-
-On the VPS, get the host fingerprint:
-
-```bash
-ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | awk '{print $2}'
-```
-
-Copy the complete `SHA256:...` output into `VPS_HOST_FINGERPRINT`. This lets the workflow verify the server it connects to.
-
-Optional secrets:
-
-- `VPS_PORT`: only if SSH uses a port other than `22`.
-- `VPS_SSH_PASSPHRASE`: if the private key is encrypted with a passphrase.
-
-No Telegram token or chat ID is needed in GitHub Actions; the service reads the configuration already on the VPS.
-
-If you no longer have the original SSH private key, create a dedicated Actions key **on your Mac**:
-
-```bash
-ssh-keygen -t ed25519 -C "takachiho-boat-actions" -f ~/.ssh/id_ed25519_boat_actions
-```
-
-Choose a new filename if that file already exists. If you choose a passphrase, save it as `VPS_SSH_PASSPHRASE` too. Copy the **public** key on your Mac:
-
-```bash
-pbcopy < ~/.ssh/id_ed25519_boat_actions.pub
-```
-
-Using your existing administrator login **on the VPS**, open deploy's authorized keys:
-
-```bash
-sudo install -d -m 700 -o deploy -g "$(id -gn deploy)" /home/deploy/.ssh
-sudo nano /home/deploy/.ssh/authorized_keys
-```
-
-Append the copied public key as a new single line. Preserve all existing lines. Then set ownership and permissions:
-
-```bash
-sudo chown deploy:"$(id -gn deploy)" /home/deploy/.ssh/authorized_keys
-sudo chmod 600 /home/deploy/.ssh/authorized_keys
-```
-
-Back **on your Mac**, test the new key, then copy the private key:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_boat_actions -o IdentitiesOnly=yes deploy@YOUR_VPS_HOST whoami
-pbcopy < ~/.ssh/id_ed25519_boat_actions
-```
-
-The login test should print `deploy`. Paste the copied **private** key into the `VPS_SSH_KEY` repository secret and set `VPS_USER` to `deploy`. This adds an incoming login key without replacing the key used by the existing `second_hand_notify` workflow.
+Keep `/opt/boat` owned by deploy and keep `/etc/sudoers.d/takachiho-boat`: both are required by this workflow. Keep the original `/etc/sudoers.d/deploy` policy used by pttbot. Changing the Actions SSH key does not require changing these permissions or restarting the bot.
 
 ### C. Commit and push
 
@@ -410,8 +349,8 @@ sudo journalctl -u takachiho-boat.service -n 20 --no-pager
 
 Expect an active timer and `Result=success`, `ExecMainStatus=0`. The oneshot service does not stay running between checks. If a run failed because secrets were missing, add the secrets and select **Re-run failed jobs**; no empty commit is necessary. Manual dispatch should use the `main` branch.
 
-Common failures: `Permission denied (publickey)` means the Actions SSH key is not authorized on the VPS (or the VPS's own key cannot fetch the repo; check which step failed); fingerprint mismatch means `VPS_HOST_FINGERPRINT` does not match the server; `sudo: a password is required` means the deployment account lacks non-interactive sudo; local changes mean you need to preserve the edits in `/opt/boat` before deployment can proceed.
+Common failures: `Permission denied (publickey)` means the Actions SSH key is not authorized on the VPS (or the VPS's own key cannot fetch the repo; check which step failed); `sudo: a password is required` means the deployment account lacks non-interactive sudo; local changes mean you need to preserve the edits in `/opt/boat` before deployment can proceed.
 
-GitHub reference: [repository secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets). SSH action reference: [inputs and host fingerprint verification](https://github.com/appleboy/ssh-action).
+GitHub reference: [repository secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets). SSH action reference: [SSH action inputs](https://github.com/appleboy/ssh-action).
 
 Reference documentation: [Telegram sendMessage](https://core.telegram.org/bots/api#sendmessage), [systemd timers](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html), [systemd execution settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html), and [the boat reservation conditions](https://eipro.jp/takachiho1/terms/view/WPT00000006).

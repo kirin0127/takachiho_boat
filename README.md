@@ -2,7 +2,7 @@
 
 For VPS monitoring with your existing Telegram bot, follow [DEPLOY.md](DEPLOY.md).
 Pushes to `main` can deploy automatically through `.github/workflows/deploy.yml`;
-complete section 8 of the deployment guide to configure the VPS secrets first.
+configure only `VPS_HOST`, `VPS_USER` (`deploy`), and `VPS_SSH_KEY` using your existing deploy private key. SSH uses port 22. See section 8 of the deployment guide for setup.
 `boat_notifier.py` checks once and sends alerts; the supplied systemd timer runs it
 every two minutes. `configure_telegram.py` imports the bot token and selected chat
 from `second_hand_notify` on the VPS. Successful alerts are remembered across
