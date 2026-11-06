@@ -1,0 +1,138 @@
+name: Deploy boat notifier to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Finish an in-progress deployment instead of interrupting it with the timer stopped.
+concurrency:
+  group: takachiho-boat-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests
+        run: python -B -m unittest -v
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate deployment secrets
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          for name in VPS_HOST VPS_USER VPS_SSH_KEY VPS_HOST_FINGERPRINT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing repository secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Deploy tested commit over SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          envs: DEPLOY_SHA
+          command_timeout: 12m
+          script: |
+            bash -se <<'BOAT_DEPLOY'
+            set -Eeuo pipefail
+            [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+            cd /opt/boat
+            deployment_uid=$(id -u)
+            admin() {
+              if [ "$deployment_uid" -eq 0 ]; then
+                "$@"
+              else
+                sudo -n "$@"
+              fi
+            }
+
+            # The initial clone/config/service installation must already exist.
+            test "$(git rev-parse --show-toplevel)" = /opt/boat
+            test -s /etc/takachiho-boat.env
+            test -f /etc/systemd/system/takachiho-boat.service
+            test -f /etc/systemd/system/takachiho-boat.timer
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "Deployment stopped: /opt/boat has local changes. Preserve them before retrying."
+              exit 1
+            fi
+            git fetch origin main
+            if [ "$DEPLOY_SHA" != "$(git rev-parse origin/main)" ]; then
+              echo "Skipping this run: a newer main commit exists. Its workflow will deploy it."
+              exit 0
+            fi
+
+            previous_sha=$(git rev-parse HEAD)
+            timer_was_active=0
+            if admin systemctl is-active --quiet takachiho-boat.timer; then
+              timer_was_active=1
+            fi
+            stage=$(mktemp -d /tmp/takachiho-deploy.XXXXXX)
+            rollback=0
+            cleanup() {
+              result=$?
+              trap - EXIT
+              set +e
+              if [ "$result" -ne 0 ] && [ "$rollback" -eq 1 ]; then
+                echo "Deployment failed; restoring commit $previous_sha."
+                admin systemctl stop takachiho-boat.timer
+                admin systemctl stop takachiho-boat.service
+                git reset --hard "$previous_sha"
+                if [ "$timer_was_active" -eq 1 ]; then
+                  admin systemctl start takachiho-boat.timer
+                fi
+                admin journalctl -u takachiho-boat.service -n 20 --no-pager
+              fi
+              rm -rf -- "$stage"
+              exit "$result"
+            }
+            trap cleanup EXIT
+
+            # Test the candidate on the VPS before interrupting the running timer.
+            git archive --output="$stage/source.tar" "$DEPLOY_SHA"
+            mkdir "$stage/source"
+            tar -xf "$stage/source.tar" -C "$stage/source"
+            (cd "$stage/source" && python3 -B -m unittest -v)
+
+            rollback=1
+            admin systemctl stop takachiho-boat.timer
+            admin systemctl stop takachiho-boat.service
+            git reset --hard "$DEPLOY_SHA"
+            # Unit files and interval overrides remain administrator-managed.
+            admin systemctl start takachiho-boat.service
+            admin systemctl enable --now takachiho-boat.timer
+            admin systemctl is-active --quiet takachiho-boat.timer
+            rollback=0
+            echo "Deployed $DEPLOY_SHA"
+            admin systemctl show takachiho-boat.service -p Result -p ExecMainStatus
+            admin systemctl list-timers takachiho-boat.timer --no-pager
+            admin journalctl -u takachiho-boat.service -n 15 --no-pager
+            BOAT_DEPLOY

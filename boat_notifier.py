@@ -19,6 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import check_boats as boat
+from history_client import publish_result
 
 log = logging.getLogger("boat_notifier")
 BASE_DIR = Path(__file__).resolve().parent
@@ -67,6 +68,7 @@ class Config:
     state_file: Path
     timeout: int = 30
     thread_id: int | None = None
+    history_port: int = 8766
 
     @property
     def deadline(self):
@@ -100,14 +102,17 @@ def load_config(env_file=None, require_telegram=True):
         latest = datetime.strptime(values.get("BOAT_TO", "16:00"), "%H:%M").time()
         timeout = int(values.get("REQUEST_TIMEOUT_SECONDS", "30"))
         thread_id = int(values["TELEGRAM_THREAD_ID"]) if values.get("TELEGRAM_THREAD_ID") else None
+        history_port = int(values.get("BOAT_HISTORY_PORT", "8766"))
     except ValueError as exc:
-        raise ConfigError("Invalid date, time, timeout, or Telegram topic ID in configuration.") from exc
+        raise ConfigError("Invalid date, time, timeout, Telegram topic ID, or history port in configuration.") from exc
     if earliest > latest or not 1 <= timeout <= 60 or (thread_id is not None and thread_id <= 0):
         raise ConfigError("Use FROM <= TO, timeout 1–60 seconds, and a positive topic ID.")
+    if not 0 <= history_port <= 65535:
+        raise ConfigError("BOAT_HISTORY_PORT must be between 0 and 65535 (0 disables history).")
     state_file = Path(values.get("BOAT_STATE_FILE", str(BASE_DIR / "state" / "notifications.json")))
     if not state_file.is_absolute():
         state_file = BASE_DIR / state_file
-    return Config(token, chat_id, day, earliest, latest, state_file, timeout, thread_id)
+    return Config(token, chat_id, day, earliest, latest, state_file, timeout, thread_id, history_port)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -235,8 +240,15 @@ def check_and_notify(config, dry_run=False, now=None):
         return
 
     def check(state=None):
-        report = boat.make_report(boat.fetch_calendar(config.day, config.timeout),
-                                  config.day, config.earliest, config.latest)
+        try:
+            report = boat.make_report(boat.fetch_calendar(config.day, config.timeout),
+                                      config.day, config.earliest, config.latest)
+        except (boat.CheckError, OSError, HTTPException):
+            if not dry_run:
+                publish_result(config)
+            raise
+        if not dry_run:
+            publish_result(config, report)
         if not report["slots"]:
             raise boat.CheckError("No matching slots returned; retaining previous notification state.")
         available = [slot for slot in report["slots"] if slot["available"]]
@@ -295,7 +307,7 @@ def main(argv=None):
         else:
             check_and_notify(config, dry_run=args.dry_run)
         return 0
-    except (ConfigError, boat.CheckError, TelegramError, OSError) as exc:
+    except (ConfigError, boat.CheckError, TelegramError, OSError, HTTPException) as exc:
         log.error("%s", exc)
         return 2
     except KeyboardInterrupt:

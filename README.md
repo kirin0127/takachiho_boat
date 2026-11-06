@@ -1,11 +1,21 @@
 # Takachiho Gorge boat availability checker
 
 For VPS monitoring with your existing Telegram bot, follow [DEPLOY.md](DEPLOY.md).
+Pushes to `main` can deploy automatically through `.github/workflows/deploy.yml`;
+complete section 8 of the deployment guide to configure the VPS secrets first.
 `boat_notifier.py` checks once and sends alerts; the supplied systemd timer runs it
 every two minutes. `configure_telegram.py` imports the bot token and selected chat
 from `second_hand_notify` on the VPS. Successful alerts are remembered across
 restarts, and failed sends can retry. The command-line checker below remains
 available for standalone use.
+
+Send `/boat_history` in the configured Telegram chat to see the five most recent
+calendar check results, newest first. In a group, use
+`/boat_history@YourBotUsername` if needed. This requires the updated
+`second_hand_notify` bot: it holds a five-entry Python `deque` in memory and
+receives each scheduled result on an authenticated localhost endpoint. History
+clears when `pttbot` restarts; no check-history database or file is created.
+See **Enable /boat_history on an existing VPS** in [DEPLOY.md](DEPLOY.md).
 
 Python 3.10+; no third-party packages required. Run from this directory:
 

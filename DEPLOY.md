@@ -10,11 +10,57 @@ The local project at `/Users/jeffchuangmbp2024/Desktop/Projects/second_hand_noti
 
 Its existing GitHub workflow uses secrets named `VPS_HOST`, `VPS_USER`, and `VPS_SSH_KEY`. The actual secret values, live `.env`, recipient database, and VPS address are not present in this local checkout. The steps below reuse the live values on the VPS. Replace `YOUR_VPS_HOST` with your VPS address. The GitHub repository is `kirin0127/takachiho_boat`; the VPS installation directory remains `/opt/boat`. Confirm the paths against your actual service if they differ from the documented defaults.
 
-The new notifier only calls Telegram's `sendMessage`. It does not consume incoming updates, register commands, or modify webhooks, so the existing `pttbot` continues handling commands normally. No new domain, incoming port, Caddy configuration, or bot is needed.
+The notifier only calls Telegram's `sendMessage`; the existing `pttbot` handles incoming commands, including `/boat_history`. After each scheduled check, the notifier also forwards a compact signed result to `pttbot` on `127.0.0.1:8766`. No new domain, public incoming port, Caddy configuration, or bot is needed.
+
+## Enable /boat_history on an existing VPS
+
+This feature changes **both repositories**. Push the updated `takachiho_boat` and `second_hand_notify` projects before updating the VPS. The command belongs to `second_hand_notify`, which already receives Telegram updates for the shared bot. Do not start another Telegram poller.
+
+If you previously added `/chatid` manually on the VPS, preserve or commit that edit before pulling. The updated bot already includes `/chatid` along with `/boat_history`.
+
+On the VPS, update the command-handling bot first. If its GitHub Actions deployment already updated it, verify the logs rather than deploying it twice:
+
+```bash
+(
+set -eu
+cd /opt/second_hand_notify
+git pull --ff-only
+.venv/bin/python -m pytest -q
+sudo systemctl restart pttbot
+sudo journalctl -u pttbot -n 20 --no-pager
+)
+```
+
+The journal should show `Boat history cache listening on 127.0.0.1:8766`.
+
+Then update the checker:
+
+```bash
+(
+set -eu
+sudo systemctl stop takachiho-boat.timer
+sudo systemctl stop takachiho-boat.service
+cd /opt/boat
+git pull --ff-only
+python3 -m unittest -v
+sudo systemctl start takachiho-boat.service
+sudo systemctl start takachiho-boat.timer
+)
+```
+
+These updates do not change your timer configuration; an existing 60-second override remains in place. Both projects default to `BOAT_HISTORY_PORT=8766`, so no new configuration is required. If that port is already in use, set the same alternative port in `/opt/second_hand_notify/.env` and `/etc/takachiho-boat.env`, then restart `pttbot`. Set it to `0` in both to disable history. The shared bot token already in each project authenticates the connection; no new secret is needed.
+
+Send `/boat_history` in the configured group. If Telegram privacy mode prevents delivery of the unaddressed command, send `/boat_history@YourBotUsername`. The command also appears in the bot's slash-command menu after `pttbot` restarts. Any member of the configured group can request its history; unrelated chats cannot retrieve that group's cached results.
+
+The reply shows up to five **calendar check results**, including checks with no available slots, individual slot statuses, and failed checks. Times are in Japan time and records are newest first. It does not fetch the calendar on demand, and it is not a history of Telegram alerts. Failed calendar checks are shown as `ERROR`, never as sold out. A failed Telegram alert does not alter the calendar result already cached.
+
+History is a Python `deque(maxlen=5)` in the long-running `pttbot` process. Nothing is written to a history database or file. After a bot restart, fewer than five records are normal until checks refill the cache. After the booking cutoff, no further calendar checks are made, so the last cached timestamps stop advancing. The existing JSON file for notification deduplication remains separate from this history feature.
+
+If the command reports an empty cache, confirm `TELEGRAM_CHAT_ID` is the chat where you issued the command, and inspect both service journals. A `History cache unreachable or rejected this check` warning means the listener is down, the ports differ, or the two bot tokens differ. Cache delivery is best-effort with a two-second timeout; missed history records are not replayed. Availability alerts continue when the cache is unavailable. Do not open port 8766 in the firewall or expose it through Caddy.
 
 ## 1. Push this project to GitHub
 
-Commit the Python files, tests, `.env.example`, `.gitignore`, documentation, and `deploy/` directory. Real configuration and runtime state are ignored. There is no GitHub Actions workflow in this project yet; you can add deployment later.
+Commit the Python files, tests, `.env.example`, `.gitignore`, documentation, `deploy/`, and `.github/workflows/deploy.yml`. Real configuration and runtime state are ignored. The included workflow deploys pushes to `main` after tests pass; configure the GitHub secrets in section 8 before pushing it.
 
 Locally, run the tests before pushing:
 
@@ -40,7 +86,7 @@ python3 -m unittest -v
 
 The SSH clone command requires a key on the VPS authorized for **this** repository. For a private repo, add a read-only GitHub deploy key to `takachiho_boat`. A deploy key attached to `second_hand_notify` does not automatically grant access to `takachiho_boat`. If `/opt/boat` already exists, update that checkout instead of cloning over it.
 
-The commands assume the root login used in your existing guide. If you use another SSH account, use `sudo` for `/opt`, `/etc`, and systemd operations. The running checker itself uses an unprivileged dynamic service user.
+Sections 2–5 describe one-time administrative setup. Use an administrator account for those steps, with `sudo` when needed. Automatic GitHub Actions deployment uses your existing **`deploy`** account; section 8 covers its SSH access and repository ownership. The running checker itself uses a separate unprivileged dynamic service user.
 
 ## 3. Reuse the existing bot and recipient
 
@@ -88,6 +134,7 @@ Configuration fields:
 | `BOAT_TO` | Latest allowed start, `16:00`, inclusive |
 | `BOAT_STATE_FILE` | `/var/lib/takachiho-boat/notifications.json` |
 | `REQUEST_TIMEOUT_SECONDS` | `30`, permitted range 1–60 |
+| `BOAT_HISTORY_PORT` | Local `pttbot` cache port, default `8766`; `0` disables publishing |
 
 A 16:00 ride finishes at 16:30. Set `BOAT_TO=15:30` if you must finish by 16:00. Use one `KEY=value` per line; simple quoted values and comments are supported, with no variable expansion or multiline values. Process environment variables take precedence over `--env-file` settings.
 
@@ -162,7 +209,7 @@ For November 20, the published booking cutoff is **November 18 at 09:00 Japan ti
 
 If the service fails, the next timer activation tries again. Check the journal for calendar/network errors or Telegram codes: `400` usually means a bad chat/topic ID, `401` a token problem, `403` missing access to the chat, and `429` rate limiting. The bot must already have permission to message that chat. If a group migrates to a supergroup, update the chat ID. For invalid state, stop the timer and inspect or restore the state file; deleting it intentionally rearms all alerts.
 
-## 7. Manual updates and future GitHub Actions
+## 7. Manual updates
 
 After pushing an update, run on the VPS:
 
@@ -186,6 +233,185 @@ journalctl -u takachiho-boat.service -n 20 --no-pager
 
 Keep `/etc/takachiho-boat.env` and `/var/lib/takachiho-boat` outside Git and intact across updates. If an update fails, restore the previous code before restarting the timer.
 
-For your later GitHub Actions workflow, the existing secret naming convention (`VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`) can be reused, but repository secrets must be configured separately in the new repo (or shared through organization secrets). Run tests before deployment, serialize deployments, and fail the remote script on errors. Deploy to `/opt/boat` and manage `takachiho-boat.service` / `takachiho-boat.timer`; keep the `pttbot` service and its files untouched. Use the oneshot exit result and the active timer as health checks, rather than expecting the checker service to stay running.
+## 8. Deploy automatically on GitHub pushes
+
+The workflow at `.github/workflows/deploy.yml` runs on every push to `main` and supports manual **Run workflow** from the Actions tab. It tests Python 3.10 and 3.12, then connects to your VPS, tests the candidate with the VPS's Python, installs the exact tested commit in `/opt/boat`, preserves the administrator-managed systemd unit files, performs a real availability check, and enables the timer.
+
+An in-progress deployment finishes before another starts. Superseded commits are skipped rather than deploying an untested newer commit. Deployment fails if `/opt/boat` contains local changes, so preserve those changes before retrying. If an installation or live check fails after stopping the timer, the script attempts to restore the previous commit, and restarts the timer if it was running before deployment. Inspect the failed Actions log if rollback itself encounters a VPS error.
+
+Credentials in `/etc/takachiho-boat.env`, state under `/var/lib/takachiho-boat`, and systemd drop-in overrides remain intact. Your 60-second override is preserved. The workflow does not deploy or restart `pttbot`; use the `second_hand_notify` workflow for that project. A deployment's real check can send a normal availability alert if it finds an opening.
+
+### A. Check the existing `deploy` account
+
+Set `VPS_USER=deploy`. The workflow already supports a non-root login and uses `sudo -n` for administrative commands, so the YAML does not need a username hardcoded into it.
+
+Using your administrator login on the VPS, inspect the existing account, home directory, repository ownership, and sudo policy:
+
+```bash
+id deploy
+getent passwd deploy
+ls -ld /opt/boat /opt/boat/.git
+sudo -l -U deploy
+```
+
+The examples below assume the home directory is `/home/deploy`; use the home directory shown by `getent passwd deploy` if different. If `/opt/boat` was cloned as root and `deploy` cannot write it, transfer ownership of this checkout only:
+
+```bash
+sudo chown -R deploy:"$(id -gn deploy)" /opt/boat
+```
+
+Keep `/etc/takachiho-boat.env` and `/var/lib/takachiho-boat` under their existing ownership. The service reads its credentials through systemd; the deployment account does not need to read the Telegram token.
+
+Once SSH key authentication is set up in section B, log in **as deploy** from your Mac:
+
+```bash
+ssh deploy@YOUR_VPS_HOST
+```
+
+Then verify the checkout and the non-interactive permissions on the VPS:
+
+```bash
+cd /opt/boat
+git status --short
+git fetch origin main
+python3 --version
+sudo -n -l
+test -s /etc/takachiho-boat.env
+test -f /etc/systemd/system/takachiho-boat.service
+test -f /etc/systemd/system/takachiho-boat.timer
+sudo -n systemctl show takachiho-boat.service -p Result -p ExecMainStatus
+```
+
+`git status --short` should be empty. Missing files mean the initial installation is incomplete; a sudo permission error means the existing role needs additional authorization. An account allowed to restart only `pttbot` will not automatically be allowed to deploy this project.
+
+The exact non-interactive permissions are listed in `deploy/deploy.sudoers`. As an administrator, use `sudo visudo -f /etc/sudoers.d/takachiho-boat` and paste that file's contents, then run `sudo visudo -c`. This adds only the boat service/timer commands and boat service logs used by the workflow; preserve the existing `pttbot` policy. Systemd unit changes must be installed separately by an administrator.
+
+Run `git fetch` as **deploy**, not as root. Root's GitHub key and SSH configuration are not automatically available to deploy. If the private repository cannot be fetched, configure a separate read-only GitHub deploy key under the deploy account and authorize its public key in this repository's **Settings → Deploy keys**.
+
+### B. Add secrets to the boat repository
+
+Open [takachiho_boat → Settings → Secrets and variables → Actions](https://github.com/kirin0127/takachiho_boat/settings/secrets/actions). Select **New repository secret** for each of these:
+
+| Secret | Value |
+| --- | --- |
+| `VPS_HOST` | VPS IP address or hostname, matching the existing deployment |
+| `VPS_USER` | `deploy` |
+| `VPS_SSH_KEY` | Full SSH **private key** whose public key is authorized for the VPS's `deploy` account, including BEGIN/END lines |
+| `VPS_HOST_FINGERPRINT` | The VPS's SSH host fingerprint, obtained below |
+
+These are repository secrets; values configured in `second_hand_notify` are not automatically inherited. Reuse the host and original private key if that workflow already logs in as `deploy`; set the username explicitly to `deploy`. A key authorized only for root will not automatically authenticate as deploy. GitHub cannot show a saved secret's value back to you, so obtain the private key from the original key file or create a new key below.
+
+There are two different SSH connections:
+
+| Connection | Private key location | Where its public key is authorized |
+| --- | --- | --- |
+| GitHub Actions → VPS as `deploy` | `VPS_SSH_KEY` GitHub secret; original key file may be on your Mac | `/home/deploy/.ssh/authorized_keys` on the VPS |
+| VPS as `deploy` → GitHub, for `git fetch` | SSH key file under `/home/deploy/.ssh/` on the VPS | GitHub repository deploy keys or an authorized GitHub account |
+
+Creating the Linux account does not create an incoming-login private key. The VPS usually holds only the **public** keys accepted for incoming login in `authorized_keys`; a private key cannot be recovered from those public keys. A file such as `/home/deploy/.ssh/id_ed25519` may instead be the outgoing GitHub key. Do not assume it is the private key needed by Actions.
+
+To identify a matching existing key without displaying private key contents, list authorized key fingerprints **on the VPS**:
+
+```bash
+sudo ssh-keygen -lf /home/deploy/.ssh/authorized_keys
+```
+
+On your Mac, inspect the fingerprint of a candidate public key, replacing the filename with the actual one:
+
+```bash
+ssh-keygen -lf ~/.ssh/id_ed25519.pub
+```
+
+If the fingerprints match and the corresponding private key exists, test it directly:
+
+```bash
+ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes deploy@YOUR_VPS_HOST whoami
+```
+
+The result should be `deploy`. Copy that private key into the GitHub secret with `pbcopy < ~/.ssh/id_ed25519`. If you cannot find the original private key, add a new key below; no changes to the existing bot's login key are necessary.
+
+On the VPS, get the host fingerprint:
+
+```bash
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | awk '{print $2}'
+```
+
+Copy the complete `SHA256:...` output into `VPS_HOST_FINGERPRINT`. This lets the workflow verify the server it connects to.
+
+Optional secrets:
+
+- `VPS_PORT`: only if SSH uses a port other than `22`.
+- `VPS_SSH_PASSPHRASE`: if the private key is encrypted with a passphrase.
+
+No Telegram token or chat ID is needed in GitHub Actions; the service reads the configuration already on the VPS.
+
+If you no longer have the original SSH private key, create a dedicated Actions key **on your Mac**:
+
+```bash
+ssh-keygen -t ed25519 -C "takachiho-boat-actions" -f ~/.ssh/id_ed25519_boat_actions
+```
+
+Choose a new filename if that file already exists. If you choose a passphrase, save it as `VPS_SSH_PASSPHRASE` too. Copy the **public** key on your Mac:
+
+```bash
+pbcopy < ~/.ssh/id_ed25519_boat_actions.pub
+```
+
+Using your existing administrator login **on the VPS**, open deploy's authorized keys:
+
+```bash
+sudo install -d -m 700 -o deploy -g "$(id -gn deploy)" /home/deploy/.ssh
+sudo nano /home/deploy/.ssh/authorized_keys
+```
+
+Append the copied public key as a new single line. Preserve all existing lines. Then set ownership and permissions:
+
+```bash
+sudo chown deploy:"$(id -gn deploy)" /home/deploy/.ssh/authorized_keys
+sudo chmod 600 /home/deploy/.ssh/authorized_keys
+```
+
+Back **on your Mac**, test the new key, then copy the private key:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_boat_actions -o IdentitiesOnly=yes deploy@YOUR_VPS_HOST whoami
+pbcopy < ~/.ssh/id_ed25519_boat_actions
+```
+
+The login test should print `deploy`. Paste the copied **private** key into the `VPS_SSH_KEY` repository secret and set `VPS_USER` to `deploy`. This adds an incoming login key without replacing the key used by the existing `second_hand_notify` workflow.
+
+### C. Commit and push
+
+After configuring the secrets, run on your Mac:
+
+```bash
+cd /Users/jeffchuangmbp2024/Desktop/Projects/takachiho_boat
+python3 -m unittest -v
+git add .
+git diff --cached --stat
+git commit -m "Add boat history and automatic VPS deployment"
+git push origin main
+```
+
+The pending `/boat_history` changes are included in this commit. Also commit and push the corresponding changes in `second_hand_notify` so its existing workflow deploys the command handler and in-memory cache. Updating only this repository will not add a Telegram command to the already-running bot.
+
+### D. Verify the deployment
+
+Open [the boat repository's Actions tab](https://github.com/kirin0127/takachiho_boat/actions), choose **Deploy boat notifier to VPS**, and inspect the latest run. Both test jobs and the deployment job should pass. The deploy log prints `Deployed <commit>` and shows the service exit result and timer schedule.
+
+On the VPS you can also check:
+
+```bash
+git -C /opt/boat log -1 --oneline
+sudo systemctl status takachiho-boat.timer --no-pager
+sudo systemctl show takachiho-boat.service -p Result -p ExecMainStatus
+sudo journalctl -u takachiho-boat.service -n 20 --no-pager
+```
+
+Expect an active timer and `Result=success`, `ExecMainStatus=0`. The oneshot service does not stay running between checks. If a run failed because secrets were missing, add the secrets and select **Re-run failed jobs**; no empty commit is necessary. Manual dispatch should use the `main` branch.
+
+Common failures: `Permission denied (publickey)` means the Actions SSH key is not authorized on the VPS (or the VPS's own key cannot fetch the repo; check which step failed); fingerprint mismatch means `VPS_HOST_FINGERPRINT` does not match the server; `sudo: a password is required` means the deployment account lacks non-interactive sudo; local changes mean you need to preserve the edits in `/opt/boat` before deployment can proceed.
+
+GitHub reference: [repository secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets). SSH action reference: [inputs and host fingerprint verification](https://github.com/appleboy/ssh-action).
 
 Reference documentation: [Telegram sendMessage](https://core.telegram.org/bots/api#sendmessage), [systemd timers](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html), [systemd execution settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html), and [the boat reservation conditions](https://eipro.jp/takachiho1/terms/view/WPT00000006).

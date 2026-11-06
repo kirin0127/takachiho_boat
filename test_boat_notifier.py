@@ -28,6 +28,7 @@ class NotifierTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.config = replace(notifier.load_config(require_telegram=False),
                                   token=TOKEN, chat_id="-100123456789",
+                                  history_port=0,
                                   state_file=self.root / "state" / "notifications.json")
 
     def run_check(self, events, sender=None, **kwargs):
@@ -98,6 +99,28 @@ class NotifierTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.run_check([event()], dry_run=True).call_count, 0)
         self.assertFalse(self.config.state_file.parent.exists())
+
+    def test_history_includes_successes_without_new_alerts_and_failed_checks(self):
+        with patch.object(notifier, "publish_result") as publish:
+            self.run_check([event()])
+            self.run_check([event()])  # Still recorded when the alert is suppressed.
+            self.assertEqual(publish.call_count, 2)
+            self.assertEqual(publish.call_args.args[1]["status"], "AVAILABLE")
+            self.run_check([event(ordable=False)])
+            self.assertEqual(publish.call_args.args[1]["status"], "NO_AVAILABILITY")
+            with self.assertRaises(boat.CheckError):
+                self.run_check([])
+            self.assertEqual(publish.call_args.args[1]["status"], "NO_MATCHING_SLOTS")
+            with patch.object(boat, "fetch_calendar", side_effect=boat.CheckError("Offline")):
+                with self.assertRaises(boat.CheckError):
+                    notifier.check_and_notify(self.config, now=NOW)
+            self.assertEqual(publish.call_args.args, (self.config,))
+
+    def test_dry_run_does_not_publish_history(self):
+        with patch.object(notifier, "publish_result") as publish, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.run_check([event()], dry_run=True)
+        publish.assert_not_called()
 
     def test_cutoff_skips_network(self):
         with patch.object(boat, "fetch_calendar") as fetch:

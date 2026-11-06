@@ -1,0 +1,12 @@
+# Install with visudo as /etc/sudoers.d/takachiho-boat (root:root, mode 0440).
+# Exact commands used by the Actions workflow; no unit-file editing or broad sudo.
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop takachiho-boat.timer
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop takachiho-boat.service
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl start takachiho-boat.timer
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl start takachiho-boat.service
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl enable --now takachiho-boat.timer
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl is-active --quiet takachiho-boat.timer
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl show takachiho-boat.service -p Result -p ExecMainStatus
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl list-timers takachiho-boat.timer --no-pager
+deploy ALL=(root) NOPASSWD: /usr/bin/journalctl -u takachiho-boat.service -n 20 --no-pager
+deploy ALL=(root) NOPASSWD: /usr/bin/journalctl -u takachiho-boat.service -n 15 --no-pager
