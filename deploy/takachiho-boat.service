@@ -1,0 +1,22 @@
+[Unit]
+Description=Takachiho Gorge availability check and Telegram notification
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+WorkingDirectory=/opt/boat
+EnvironmentFile=/etc/takachiho-boat.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/boat/boat_notifier.py
+StateDirectory=takachiho-boat
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=150
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
