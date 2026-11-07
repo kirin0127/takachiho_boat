@@ -48,6 +48,28 @@ class CalendarTests(unittest.TestCase):
         )
         self.assertEqual([s["start"][11:16] for s in slots], ["13:00", "16:00"])
 
+    def test_negative_inventory_for_explicitly_sold_out_slot_does_not_fail_day(self):
+        for remaining in ('-1', -1, '-2'):
+            with self.subTest(remaining=remaining):
+                slots = parse(event(ordable=False, is_full=True, order_remain_amount=remaining),
+                              event('2026-11-20T14:00:00+09:00', '2026-11-20T14:30:00+09:00'))
+                self.assertEqual(slots[0]['status'], 'SOLD_OUT')
+                self.assertFalse(slots[0]['available'])
+                self.assertEqual(slots[0]['remaining'], 0)
+                self.assertTrue(slots[1]['available'])
+
+    def test_negative_inventory_requires_both_full_and_unbookable_flags(self):
+        for changes in ({'ordable': True, 'is_full': True},
+                        {'ordable': True, 'is_full': False},
+                        {'ordable': False, 'is_full': False}):
+            with self.subTest(changes=changes), self.assertRaises(boat.CheckError):
+                parse(event(order_remain_amount='-1', **changes))
+
+    def test_malformed_inventory_is_still_rejected_for_sold_out_slots(self):
+        for remaining in (None, True, '-1.0', '--1', '-', '', '+1'):
+            with self.subTest(remaining=remaining), self.assertRaises(boat.CheckError):
+                parse(event(ordable=False, is_full=True, order_remain_amount=remaining))
+
     def test_timezone_conversion(self):
         self.assertEqual(parse(event("2026-11-20T04:00:00+00:00",
                                      "2026-11-20T04:30:00+00:00"))[0]["start"],

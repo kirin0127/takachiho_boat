@@ -109,6 +109,24 @@ class MultiDateTests(unittest.TestCase):
         for daily in config.daily_configs():
             self.assertEqual((daily.earliest, daily.latest), (time(10), time(16)))
 
+    def test_negative_sold_out_inventory_publishes_successful_history(self):
+        config = list(self.load().daily_configs())[1]
+        events = [event('2026-11-21T13:00:00+09:00', '2026-11-21T13:30:00+09:00',
+                        ordable=False, is_full=True, order_remain_amount='-1')]
+        with tempfile.TemporaryDirectory() as directory:
+            config = replace(config, state_file=Path(directory) / 'notifications.json')
+            with patch.object(boat, 'fetch_calendar', return_value={'errors': [], 'results': events}), \
+                    patch.object(notifier, 'publish_result') as publish, \
+                    patch.object(notifier, 'send_message') as send:
+                notifier.check_and_notify(config, now=NOW)
+                publish.assert_called_once()
+                report = publish.call_args.args[1]
+                self.assertEqual(report['date'], '2026-11-21')
+                self.assertEqual(report['status'], 'NO_AVAILABILITY')
+                self.assertEqual(report['slots'][0]['status'], 'SOLD_OUT')
+                self.assertEqual(report['slots'][0]['remaining'], 0)
+                send.assert_not_called()
+
     def test_first_cutoff_does_not_stop_second_date(self):
         first, second = self.load().daily_configs()
         with patch.object(boat, 'fetch_calendar', return_value={'errors': [], 'results': [

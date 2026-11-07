@@ -99,9 +99,15 @@ def parse_calendar(payload, day, earliest, latest):
         )}
         remaining = event.get("order_remain_amount")
         if type(remaining) not in (str, int) or not str(remaining).isascii() \
-                or not str(remaining).isdigit():
+                or not str(remaining).removeprefix("-").isdigit():
             raise CheckError("Missing or invalid order_remain_amount.")
         remaining = int(remaining)
+        if remaining < 0:
+            # The live calendar can return -1 for a full, unbookable slot.
+            # Only those explicit flags justify treating negative inventory as zero.
+            if flags["ordable"] or not flags["is_full"]:
+                raise CheckError("Negative inventory without explicit sold-out flags.")
+            remaining = 0
         available = (
             flags["ordable"] and flags["is_reserve_started"]
             and not flags["is_reserve_dead"] and not flags["is_full"]
