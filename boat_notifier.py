@@ -135,15 +135,18 @@ class NoRedirect(HTTPRedirectHandler):
 TELEGRAM_HTTP = build_opener(NoRedirect())
 
 
-def send_message(config, text):
+def send_message(config, text, slots=()):
     """Send only: never start polling or change the existing bot's webhook."""
+    keyboard = [[{
+        "text": f"Open {slot['start'][11:16]}–{slot['end'][11:16]} (Japan)",
+        "url": slot.get("booking_url") or boat.CALENDAR_URL,
+    }] for slot in slots]
+    keyboard.append([{"text": "Open booking calendar", "url": boat.CALENDAR_URL}])
     body = {
         "chat_id": config.chat_id,
         "text": text,
         "link_preview_options": {"is_disabled": True},
-        "reply_markup": {"inline_keyboard": [[
-            {"text": "Open booking calendar", "url": boat.CALENDAR_URL}
-        ]]},
+        "reply_markup": {"inline_keyboard": keyboard},
     }
     if config.thread_id is not None:
         body["message_thread_id"] = config.thread_id
@@ -193,7 +196,8 @@ def notification_text(config, slots, checked_at):
         lines.append(f"• {slot['start'][11:16]}–{slot['end'][11:16]}"
                      f" — {slot['remaining']} boat(s) available")
     lines += ["", f"Checked: {checked_at}",
-              "Book promptly on the official website; availability can change.", boat.CALENDAR_URL]
+              "Open a time button below, then choose Reserve on the official site.",
+              "Availability can change."]
     return "\n".join(lines)
 
 
@@ -271,6 +275,8 @@ def check_and_notify(config, dry_run=False, now=None):
             boat.display(report, False)
             if available:
                 print("\nTelegram preview (not sent):\n" + notification_text(config, available, report["checked_at"]))
+                for slot in available:
+                    print(f"Button {slot['start'][11:16]}: {slot['booking_url']}")
             return
         notified = set(state["notified"])
         # Only an explicit unavailable observation re-arms a previously alerted slot.
@@ -281,7 +287,8 @@ def check_and_notify(config, dry_run=False, now=None):
         state["last_checked_at"] = report["checked_at"]
         if new_slots and now.timestamp() >= state["next_send_after"]:
             try:
-                message_id = send_message(config, notification_text(config, new_slots, report["checked_at"]))
+                message_id = send_message(config, notification_text(config, new_slots, report["checked_at"]),
+                                          slots=new_slots)
             except TelegramError as exc:
                 state["next_send_after"] = int(datetime.now(boat.JAPAN).timestamp()) + exc.retry_after + 1
                 save_state(config.state_file, state)

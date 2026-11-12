@@ -52,6 +52,20 @@ Exit codes: `0` = availability found; `1` = slots returned but none bookable; `2
 
 ## Website analysis
 
+Telegram availability alerts include a separate **Open HH:MM–HH:MM (Japan)**
+button for every newly available slot. Each opens the official slot Details
+page with that date and time selected; choose **Reserve** there to continue.
+The calendar button remains available as a fallback if link metadata is missing.
+The CLI and notifier dry run also print the slot URLs.
+
+Verified November 12, 2026: clicking a calendar time opens a popup whose
+**Details** link uses `/takachiho1/events/view/{multi_edit_key}` with
+`service_cd`, `service_session_cd` (from `session_cd`),
+`service_start_datetime`, and `service_end_datetime` query parameters.
+Times use `YYYY/MM/DD HH:MM:SS` in Japan time. The final `/orders/add` URL
+requires a browser-specific temporary hold, so alerts share the slot Details
+link. The notifier does not create holds or submit reservations.
+
 Inspected on November 6, 2026:
 
 - The [booking page](https://eipro.jp/takachiho1/eventCalendars/index) uses JavaScript to load the calendar. Its initial HTML does not contain availability.

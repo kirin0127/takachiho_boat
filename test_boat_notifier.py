@@ -57,6 +57,8 @@ class NotifierTests(unittest.TestCase):
         self.assertIn("14:00–14:30", text)
         self.assertIn("15:00–15:30", text)
         self.assertNotIn("13:00–13:30", text)
+        self.assertEqual([slot["start"][11:16] for slot in send.call_args.kwargs["slots"]],
+                         ["14:00", "15:00"])
 
     def test_send_failure_is_not_marked_delivered_and_can_retry(self):
         with patch.object(notifier, "datetime", wraps=datetime) as fake_datetime, \
@@ -157,6 +159,34 @@ class NotifierTests(unittest.TestCase):
         self.assertEqual(payload["chat_id"], self.config.chat_id)
         self.assertEqual(payload["message_thread_id"], 25)
         self.assertNotIn("parse_mode", payload)
+        self.assertEqual(payload["reply_markup"]["inline_keyboard"], [[{
+            "text": "Open booking calendar", "url": boat.CALENDAR_URL,
+        }]])
+
+    def test_telegram_has_a_distinct_direct_link_for_each_available_time(self):
+        events = [event(), event("2026-11-20T14:00:00+09:00", "2026-11-20T14:30:00+09:00")]
+        slots = boat.parse_calendar({"errors": [], "results": events},
+                                    self.config.day, self.config.earliest, self.config.latest)
+        response = io.BytesIO(json.dumps({"ok": True, "result": {"message_id": 123}}).encode())
+        with patch.object(notifier.TELEGRAM_HTTP, "open", return_value=response) as request:
+            notifier.send_message(self.config, "Test", slots=slots)
+        payload = json.loads(request.call_args.args[0].data)
+        buttons = payload["reply_markup"]["inline_keyboard"]
+        self.assertEqual([row[0]["url"] for row in buttons[:-1]],
+                         [slot["booking_url"] for slot in slots])
+        self.assertNotEqual(buttons[0][0]["url"], buttons[1][0]["url"])
+        self.assertEqual(buttons[0][0]["text"], "Open 13:00–13:30 (Japan)")
+        self.assertEqual(buttons[-1][0]["url"], boat.CALENDAR_URL)
+
+    def test_all_day_alert_keeps_long_links_in_buttons_within_message_limit(self):
+        events = [event(f"2026-11-20T{hour:02}:00:00+09:00",
+                        f"2026-11-20T{hour:02}:30:00+09:00") for hour in range(8, 17)]
+        slots = boat.parse_calendar({"errors": [], "results": events},
+                                    self.config.day, self.config.earliest, self.config.latest)
+        text = notifier.notification_text(self.config, slots, NOW.isoformat())
+        self.assertLess(len(text), 4096)
+        self.assertNotIn("events/view", text)
+        self.assertIn("Reserve", text)
 
     def test_telegram_errors_hide_token_and_preserve_retry_after(self):
         with patch.object(notifier.TELEGRAM_HTTP, "open", side_effect=URLError(TOKEN)):

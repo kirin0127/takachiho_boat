@@ -8,7 +8,7 @@ import math
 import sys
 import time as clock
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -69,6 +69,26 @@ def event_datetime(event, name):
         return value.astimezone(JAPAN)
     except (KeyError, ValueError, TypeError) as exc:
         raise CheckError(f"Missing or invalid event timestamp: {name}.") from exc
+
+
+def booking_url(event, start, end):
+    """Share the selected slot's Details link, without creating a session hold."""
+    service = event.get("service_cd")
+    session = event.get("service_session_cd", event.get("session_cd"))
+    key = event.get("multi_edit_key")
+    if not all(isinstance(value, str) and value.strip() for value in (service, session, key)):
+        # Missing link metadata must not hide otherwise valid availability.
+        return CALENDAR_URL
+    query = urlencode({
+        "closable": 1,
+        "service_cd": service,
+        "service_session_cd": session,
+        "service_start_datetime": start.strftime("%Y/%m/%d %H:%M:%S"),
+        "service_end_datetime": end.strftime("%Y/%m/%d %H:%M:%S"),
+    })
+    # This is makeDetaillUrl in app.module.front.order.js. orders/add alone
+    # fails without the browser-specific temporary hold created by Reserve.
+    return f"https://eipro.jp/takachiho1/events/view/{quote(key, safe='')}?{query}"
 
 
 def parse_calendar(payload, day, earliest, latest):
@@ -132,6 +152,7 @@ def parse_calendar(payload, day, earliest, latest):
             "status": status,
             "available": available,
             "remaining": remaining,
+            "booking_url": booking_url(event, start, end),
         })
     return sorted(slots, key=lambda slot: slot["start"])
 
@@ -162,7 +183,10 @@ def display(report, as_json):
         print(f"  {slot['start'][11:16]}–{slot['end'][11:16]}  "
               f"{slot['status']:<16} remaining: {slot['remaining']}")
     if report["status"] == "AVAILABLE":
-        print(f"Available slot found! Book manually: {CALENDAR_URL}")
+        print("Available slot found! Open the selected time, then choose Reserve:")
+        for slot in report["slots"]:
+            if slot["available"]:
+                print(f"  {slot['start'][11:16]}: {slot['booking_url']}")
     elif report["status"] == "NO_MATCHING_SLOTS":
         print("No matching slots were returned. This does not establish sold-out status.")
     else:

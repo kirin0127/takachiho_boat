@@ -4,6 +4,7 @@ import io
 import json
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import check_boats as boat
 
@@ -14,7 +15,9 @@ DAY = date(2026, 11, 20)
 def event(start="2026-11-20T13:00:00+09:00", end="2026-11-20T13:30:00+09:00", **changes):
     result = dict(start=start, end=end, ordable=True, order_remain_amount="1",
                   is_reserve_started=True, is_reserve_dead=False, is_full=False,
-                  enabled_flg=True, reserve_possible=True, is_accept=True)
+                  enabled_flg=True, reserve_possible=True, is_accept=True,
+                  service_cd="test-service", session_cd="test-session",
+                  multi_edit_key="EV00000007")
     result.update(changes)
     return result
 
@@ -24,6 +27,37 @@ def parse(*events):
 
 
 class CalendarTests(unittest.TestCase):
+    def test_booking_link_selects_the_exact_slot_in_japan_time(self):
+        slot = parse(event("2026-11-20T04:00:00+00:00",
+                           "2026-11-20T04:30:00+00:00"))[0]
+        url = urlsplit(slot["booking_url"])
+        self.assertEqual(url.scheme, "https")
+        self.assertEqual(url.netloc, "eipro.jp")
+        self.assertEqual(url.path, "/takachiho1/events/view/EV00000007")
+        self.assertEqual(parse_qs(url.query), {
+            "closable": ["1"], "service_cd": ["test-service"],
+            "service_session_cd": ["test-session"],
+            "service_start_datetime": ["2026/11/20 13:00:00"],
+            "service_end_datetime": ["2026/11/20 13:30:00"],
+        })
+
+    def test_link_metadata_fallback_does_not_hide_availability(self):
+        for field in ("service_cd", "session_cd", "multi_edit_key"):
+            for value in (None, "", " ", 42):
+                with self.subTest(field=field, value=value):
+                    slot = parse(event(**{field: value}))[0]
+                    self.assertTrue(slot["available"])
+                    self.assertEqual(slot["booking_url"], boat.CALENDAR_URL)
+
+    def test_booking_link_uses_explicit_session_field_and_encodes_identifiers(self):
+        slot = parse(event(service_cd="service&other=value",
+                           service_session_cd="selected-session",
+                           multi_edit_key="key/with?reserved"))[0]
+        url = urlsplit(slot["booking_url"])
+        self.assertEqual(url.path, "/takachiho1/events/view/key%2Fwith%3Freserved")
+        self.assertEqual(parse_qs(url.query)["service_cd"], ["service&other=value"])
+        self.assertEqual(parse_qs(url.query)["service_session_cd"], ["selected-session"])
+
     def test_positive_inventory_and_explicit_bookable_flag(self):
         self.assertTrue(parse(event())[0]["available"])
         self.assertFalse(parse(event(ordable=False))[0]["available"])

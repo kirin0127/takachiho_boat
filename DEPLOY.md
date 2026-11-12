@@ -202,7 +202,7 @@ Do not run a second scheduler or `check_boats.py --watch` for this service. The 
 
 ## 6. Notification behavior and daily operations
 
-On the first successful check, any available matching slots trigger an alert. Newly available slots are grouped into one message with Japan ride times, remaining boat counts, the check timestamp, and a booking link.
+On the first successful check, any available matching slots trigger an alert. Newly available slots are grouped into one message with Japan ride times, remaining boat counts, the check timestamp, and a separate button for each selected slot. Open a time button, then choose Reserve on the official slot Details page. That page starts the site's required browser-specific temporary hold when you choose Reserve; the notifier never creates holds. A calendar button remains as a fallback if slot link metadata is missing.
 
 A successfully notified slot is not repeatedly announced while it remains available, even after restarting or redeploying. If a later successful check explicitly observes it unavailable, it is rearmed and can trigger another alert when it opens again. Inventory count changes alone do not trigger another message. Availability that appears and disappears entirely between checks can be missed.
 
